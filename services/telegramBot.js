@@ -1202,53 +1202,53 @@ ${alert.message}
             return `${seconds} s`;
         }
     }
-}
+
 
     async handleActiveCampaigns(msg) {
-    const chatId = msg.chat.id;
+        const chatId = msg.chat.id;
 
-    if (!this.isAuthorized(msg.from.id)) {
-        await this.sendMessage(chatId, '❌ Unauthorized');
-        return;
-    }
-
-    try {
-        const campaigns = await Campaign.find({ status: 'running' }).sort({ createdAt: -1 });
-
-        if (campaigns.length === 0) {
-            await this.sendMessage(chatId, '😴 <b>No Active Campaigns</b>\n\nUse /campaigns to see history.');
+        if (!this.isAuthorized(msg.from.id)) {
+            await this.sendMessage(chatId, '❌ Unauthorized');
             return;
         }
 
-        await this.sendMessage(chatId, `🚀 <b>Active Campaigns (${campaigns.length})</b>\n━━━━━━━━━━━━━━━━━`);
+        try {
+            const campaigns = await Campaign.find({ status: 'running' }).sort({ createdAt: -1 });
 
-        for (const campaign of campaigns) {
-            const progress = campaign.progress?.totalWallets > 0
-                ? Math.round((campaign.progress.processedWallets / campaign.progress.totalWallets) * 100)
-                : 0;
+            if (campaigns.length === 0) {
+                await this.sendMessage(chatId, '😴 <b>No Active Campaigns</b>\n\nUse /campaigns to see history.');
+                return;
+            }
 
-            const modeIcon = campaign.mode === 'human_drip' ? '💧' : '⚡';
+            await this.sendMessage(chatId, `🚀 <b>Active Campaigns (${campaigns.length})</b>\n━━━━━━━━━━━━━━━━━`);
 
-            const message = `
+            for (const campaign of campaigns) {
+                const progress = campaign.progress?.totalWallets > 0
+                    ? Math.round((campaign.progress.processedWallets / campaign.progress.totalWallets) * 100)
+                    : 0;
+
+                const modeIcon = campaign.mode === 'human_drip' ? '💧' : '⚡';
+
+                const message = `
 <b>${campaign.name}</b> ${modeIcon}
 ID: <code>${campaign._id}</code>
 Progress: ${this.createProgressBar(progress, 8)} ${progress}%
 ✅ ${campaign.progress?.successfulTx || 0}   ❌ ${campaign.progress?.failedTx || 0}
                 `.trim();
 
-            const keyboard = {
-                inline_keyboard: [[
-                    { text: '🔍 Track / Refresh', callback_data: `action:campaign_details:${campaign._id}` },
-                    { text: '⏸️ Pause', callback_data: `action:campaign_pause:${campaign._id}` }
-                ]]
-            };
+                const keyboard = {
+                    inline_keyboard: [[
+                        { text: '🔍 Track / Refresh', callback_data: `action:campaign_details:${campaign._id}` },
+                        { text: '⏸️ Pause', callback_data: `action:campaign_pause:${campaign._id}` }
+                    ]]
+                };
 
-            await this.sendMessage(chatId, message, { reply_markup: keyboard });
+                await this.sendMessage(chatId, message, { reply_markup: keyboard });
+            }
+        } catch (error) {
+            await this.sendMessage(chatId, `❌ Error: ${error.message}`);
         }
-    } catch (error) {
-        await this.sendMessage(chatId, `❌ Error: ${error.message}`);
     }
-}
 }
 
 module.exports = new TelegramBotService();
