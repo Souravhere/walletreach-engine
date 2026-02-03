@@ -97,6 +97,24 @@ class TelegramBotService {
         // Callback query handler for inline keyboards
         this.bot.on('callback_query', (query) => this.handleCallbackQuery(query));
 
+        // Text Menu Handlers (for Persistent Keyboard)
+        this.bot.on('message', (msg) => {
+            const text = msg.text;
+            if (!text || text.startsWith('/')) return; // Ignore commands
+
+            switch (text) {
+                case '🚀 Active Campaigns': this.handleActiveCampaigns(msg); break;
+                case '📊 Status': this.handleStatus(msg); break;
+                case '🎯 Campaigns': this.handleCampaigns(msg); break;
+                case '🎯 All Campaigns': this.handleCampaigns(msg); break; // Handle alias
+                case '💳 Wallets': this.handleWallets(msg); break;
+                case '📈 Metrics': this.handleMetrics(msg); break;
+                case '🔔 Alerts': this.handleAlerts(msg); break;
+                case '⚙️ Settings': this.handleSettings(msg); break;
+                case '❓ Help': this.handleHelp(msg); break;
+            }
+        });
+
         logger.info('Telegram bot commands registered');
     }
 
@@ -184,9 +202,10 @@ ID: <code>${campaign._id}</code>
     getMainMenuKeyboard() {
         return {
             keyboard: [
-                ['📊 Status', '🎯 Campaigns'],
+                ['🚀 Active Campaigns'],
+                ['📊 Status', '🎯 All Campaigns'],
                 ['💳 Wallets', '📈 Metrics'],
-                ['🔔 Alerts', '❓ Help']
+                ['🔔 Alerts', '⚙️ Settings', '❓ Help']
             ],
             resize_keyboard: true,
             persistent: true
@@ -579,13 +598,13 @@ Wallets: ${campaign.senderWallets?.length || 0}${dripInfo}
 
             for (const wallet of wallets) {
                 const usagePercent = wallet.limits.maxTransactionsPerDay > 0
-                    ? Math.round((wallet.dailyUsage.transactionCount / wallet.limits.maxTransactionsPerDay) * 100)
+                    ? Math.round(((wallet.dailyUsage?.transactionCount || 0) / wallet.limits.maxTransactionsPerDay) * 100)
                     : 0;
 
                 message += `<b>${wallet.name}</b>\n`;
                 message += `Address: <code>${wallet.address.slice(0, 10)}...${wallet.address.slice(-8)}</code>\n`;
                 message += `Status: ${wallet.status === 'active' ? '✅' : '⚠️'} ${wallet.status}\n`;
-                message += `Daily Usage: ${wallet.dailyUsage.transactionCount}/${wallet.limits.maxTransactionsPerDay} (${usagePercent}%)\n`;
+                message += `Daily Usage: ${wallet.dailyUsage?.transactionCount || 0}/${wallet.limits.maxTransactionsPerDay} (${usagePercent}%)\n`;
                 message += `\n`;
             }
 
@@ -889,7 +908,7 @@ ${tx.error ? `\n<b>Error:</b> ${tx.error}` : ''}
             let totalDailyUsage = 0;
             wallets.forEach(w => {
                 if (w.status === 'active') activeWallets++;
-                totalDailyUsage += w.dailyUsage.transactionCount;
+                totalDailyUsage += w.dailyUsage?.transactionCount || 0;
             });
 
             const reportMessage = `
@@ -1183,6 +1202,53 @@ ${alert.message}
             return `${seconds} s`;
         }
     }
+}
+
+    async handleActiveCampaigns(msg) {
+    const chatId = msg.chat.id;
+
+    if (!this.isAuthorized(msg.from.id)) {
+        await this.sendMessage(chatId, '❌ Unauthorized');
+        return;
+    }
+
+    try {
+        const campaigns = await Campaign.find({ status: 'running' }).sort({ createdAt: -1 });
+
+        if (campaigns.length === 0) {
+            await this.sendMessage(chatId, '😴 <b>No Active Campaigns</b>\n\nUse /campaigns to see history.');
+            return;
+        }
+
+        await this.sendMessage(chatId, `🚀 <b>Active Campaigns (${campaigns.length})</b>\n━━━━━━━━━━━━━━━━━`);
+
+        for (const campaign of campaigns) {
+            const progress = campaign.progress?.totalWallets > 0
+                ? Math.round((campaign.progress.processedWallets / campaign.progress.totalWallets) * 100)
+                : 0;
+
+            const modeIcon = campaign.mode === 'human_drip' ? '💧' : '⚡';
+
+            const message = `
+<b>${campaign.name}</b> ${modeIcon}
+ID: <code>${campaign._id}</code>
+Progress: ${this.createProgressBar(progress, 8)} ${progress}%
+✅ ${campaign.progress?.successfulTx || 0}   ❌ ${campaign.progress?.failedTx || 0}
+                `.trim();
+
+            const keyboard = {
+                inline_keyboard: [[
+                    { text: '🔍 Track / Refresh', callback_data: `action:campaign_details:${campaign._id}` },
+                    { text: '⏸️ Pause', callback_data: `action:campaign_pause:${campaign._id}` }
+                ]]
+            };
+
+            await this.sendMessage(chatId, message, { reply_markup: keyboard });
+        }
+    } catch (error) {
+        await this.sendMessage(chatId, `❌ Error: ${error.message}`);
+    }
+}
 }
 
 module.exports = new TelegramBotService();

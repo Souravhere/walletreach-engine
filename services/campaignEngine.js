@@ -10,7 +10,7 @@ const { getEligibleWallets } = require('./walletSelector');
 const filterCampaignDuplicatesOnly = require('./filterCampaignDuplicatesOnly');
 const nonceManager = require('./nonceManager');
 const logger = require('../utils/logger');
-const telegramBot = require('./telegramBot');
+// telegramBot will be lazy-loaded to prevent circular dependency
 
 /**
  * Campaign Execution Engine
@@ -93,9 +93,14 @@ class CampaignEngine {
             logger.info(`Campaign ${campaignId} started with ${recipients.length} recipients`);
 
             // Notify via Telegram
-            telegramBot.notifyCampaignStarted(campaign).catch(err =>
-                logger.error('Telegram notification error:', err)
-            );
+            try {
+                const telegramBot = require('./telegramBot');
+                telegramBot.notifyCampaignStarted(campaign).catch(err =>
+                    logger.error('Telegram notification error:', err)
+                );
+            } catch (err) {
+                logger.warn('Telegram bot not available for start notification');
+            }
 
             return { success: true, totalRecipients: recipients.length };
         } catch (error) {
@@ -557,9 +562,14 @@ class CampaignEngine {
             await campaign.save();
 
             // Notify via Telegram
-            telegramBot.notifyCampaignCompleted(campaign).catch(err =>
-                logger.error('Telegram notification error:', err)
-            );
+            try {
+                const telegramBot = require('./telegramBot');
+                telegramBot.notifyCampaignCompleted(campaign).catch(err =>
+                    logger.error('Telegram notification error:', err)
+                );
+            } catch (err) {
+                // Ignore
+            }
 
             await this.createAlert(
                 'info',
