@@ -987,38 +987,80 @@ Total Wallets: ${wallets.length}
 
     async handleCallbackQuery(query) {
         const chatId = query.message.chat.id;
+        const msg = query.message;
         const data = query.data;
 
+        // Verify user is authorized
         if (!this.isAuthorized(query.from.id)) {
             await this.bot.answerCallbackQuery(query.id, { text: 'Unauthorized' });
             return;
         }
 
         try {
-            const [action, campaignId] = data.split(':');
+            await this.bot.answerCallbackQuery(query.id);
 
-            await this.bot.answerCallbackQuery(query.id, { text: 'Processing...' });
+            // Handle "action:command[:param]" format (New Menu System)
+            if (data.startsWith('action:')) {
+                const parts = data.split(':');
+                const command = parts[1];
+                const param = parts[2]; // Optional ID for details/actions
 
-            switch (action) {
-                case 'pause':
-                    await campaignEngine.pauseCampaign(campaignId);
-                    await this.sendMessage(chatId, '⏸️ Campaign paused');
-                    break;
-                case 'resume':
-                    await campaignEngine.resumeCampaign(campaignId);
-                    await this.sendMessage(chatId, '▶️ Campaign resumed');
-                    break;
-                case 'stop':
-                    await campaignEngine.stopCampaign(campaignId);
-                    await this.sendMessage(chatId, '⏹️ Campaign stopped');
-                    break;
-                case 'refresh':
-                    // Re-send campaign details
-                    await this.handleCampaignDetails({ chat: { id: chatId }, from: query.from }, campaignId);
-                    break;
+                // Map 'from' user to message so checks pass
+                msg.from = query.from;
+
+                switch (command) {
+                    // Navigation
+                    case 'menu': return this.handleMenu(msg);
+                    case 'help': return this.handleHelp(msg);
+
+                    // Monitoring
+                    case 'status': return this.handleStatus(msg);
+                    case 'health': return this.handleHealth(msg);
+                    case 'metrics': return this.handleMetrics(msg);
+                    case 'logs': return this.handleLogs(msg);
+
+                    // Campaigns
+                    case 'campaigns': return this.handleCampaigns(msg);
+                    case 'campaign_details': return this.handleCampaignDetails(msg, param);
+                    case 'campaign_pause': return this.executeCampaignAction(msg, param, 'pause');
+
+                    // Wallets & Alters
+                    case 'wallets': return this.handleWallets(msg);
+                    case 'alerts': return this.handleAlerts(msg);
+                    case 'report': return this.handleReport(msg);
+
+                    // Settings
+                    case 'settings': return this.handleSettings(msg);
+                    case 'emergency_confirm': return this.handleEmergency(msg);
+                }
             }
+
+            // Handle "command:id" format (Legacy Campaign Actions)
+            if (data.includes(':')) {
+                const parts = data.split(':');
+                // Avoid conflict with action: prefix if it slipped through
+                if (parts[0] !== 'action') {
+                    const action = parts[0];
+                    const campaignId = parts[1];
+
+                    // Map 'from' user
+                    msg.from = query.from;
+
+                    switch (action) {
+                        case 'pause':
+                        case 'resume':
+                        case 'stop':
+                        case 'restart':
+                            return this.executeCampaignAction(msg, campaignId, action);
+                        case 'refresh':
+                            return this.handleCampaignDetails(msg, campaignId);
+                    }
+                }
+            }
+
         } catch (error) {
-            await this.sendMessage(chatId, `❌ Error: ${error.message} `);
+            logger.error('Callback error', error);
+            await this.sendMessage(chatId, `❌ Error: ${error.message}`);
         }
     }
 
@@ -1063,18 +1105,7 @@ Sender Wallets: ${campaign.senderWallets?.length || 0}
     /**
      * Send progress milestone notification
      */
-    async notifyCampaignProgress(campaign, percentage) {
-        const message = `
-📊 <b>Campaign Progress: ${percentage}%</b>
 
-<b>${campaign.name}</b>
-
-        Processed: ${campaign.progress?.processedWallets} / ${campaign.progress?.totalWallets}
-Success Rate: ${(campaign.metrics?.successRate || 0).toFixed(1)}%
-            `.trim();
-
-        await this.notifyAdmins(message);
-    }
 
     /**
      * Send error/alert notification
