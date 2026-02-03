@@ -72,6 +72,10 @@ const createCampaign = async (req, res) => {
             filters: filters || {},
             rewardConfig,
             status: 'draft',
+            mode: req.body.mode || 'standard',
+            dripConfig: req.body.dripConfig || {},
+            walletSource: req.body.walletSource || 'generated',
+            uploadedWallets: req.body.uploadedWallets || [],
             createdBy: req.user._id,
         });
 
@@ -170,9 +174,20 @@ const simulateCampaign = async (req, res) => {
             estimatedTokens = avg * BigInt(estimatedWallets);
         }
 
-        // Estimate duration (30-45 seconds per tx, distributed across wallets)
-        const avgTimePerTx = 37.5; // seconds
+        // Estimate duration
+        let avgTimePerTx = 37.5; // seconds (Base time for blockchain confirmation)
         const totalWallets = senderWallets.length || 1;
+
+        // Adjust for Campaign Mode
+        if (req.body.mode === 'human_drip') {
+            const minMinutes = req.body.dripConfig?.minInterval || 2;
+            const maxMinutes = req.body.dripConfig?.maxInterval || 5;
+            const avgDelayMinutes = (minMinutes + maxMinutes) / 2;
+
+            // Add avg delay (converted to seconds) to base tx time
+            avgTimePerTx += (avgDelayMinutes * 60);
+        }
+
         const estimatedDuration = (estimatedWallets * avgTimePerTx) / totalWallets / 60; // minutes
 
         res.json({

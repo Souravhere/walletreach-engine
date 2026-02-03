@@ -108,6 +108,22 @@ const campaignSchema = new mongoose.Schema({
         enum: ['draft', 'ready', 'running', 'paused', 'completed', 'stopped', 'failed'],
         default: 'draft',
     },
+    // Campaign Mode (Standard vs Human/Drip)
+    mode: {
+        type: String,
+        enum: ['standard', 'human_drip'],
+        default: 'standard',
+    },
+    dripConfig: {
+        minInterval: {
+            type: Number,
+            default: 2, // Minutes
+        },
+        maxInterval: {
+            type: Number,
+            default: 5, // Minutes
+        },
+    },
     // Progress tracking
     progress: {
         totalWallets: {

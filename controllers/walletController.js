@@ -183,21 +183,43 @@ const getWalletBalance = async (req, res) => {
         const bnbBalance = await provider.getBalance(wallet.address);
 
         let tokenBalance = '0';
+        let tokenDecimals = 18;
+        let tokenSymbol = '';
+
         if (tokenAddress) {
-            // Get token balance
+            // Get token balance and details
             const tokenContract = new ethers.Contract(
                 tokenAddress,
-                ['function balanceOf(address) view returns (uint256)'],
+                [
+                    'function balanceOf(address) view returns (uint256)',
+                    'function decimals() view returns (uint8)',
+                    'function symbol() view returns (string)'
+                ],
                 provider
             );
-            tokenBalance = await tokenContract.balanceOf(wallet.address);
+
+            try {
+                const [bal, dec, sym] = await Promise.all([
+                    tokenContract.balanceOf(wallet.address),
+                    tokenContract.decimals().catch(() => 18), // Default to 18 if fails
+                    tokenContract.symbol().catch(() => '')
+                ]);
+
+                tokenBalance = bal.toString();
+                tokenDecimals = Number(dec);
+                tokenSymbol = sym;
+            } catch (err) {
+                console.error('Error fetching token details:', err.message);
+            }
         }
 
         res.json({
             address: wallet.address,
             bnbBalance: bnbBalance.toString(),
             bnbBalanceFormatted: ethers.formatEther(bnbBalance),
-            tokenBalance: tokenBalance.toString(),
+            tokenBalance: tokenBalance,
+            tokenBalanceFormatted: tokenAddress ? ethers.formatUnits(tokenBalance, tokenDecimals) : '0',
+            tokenSymbol
         });
     } catch (error) {
         console.error('Get wallet balance error:', error);

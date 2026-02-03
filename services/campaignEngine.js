@@ -116,6 +116,12 @@ class CampaignEngine {
 
         const { campaign, recipients } = state;
 
+        // ROUTING: Use dedicated processor for Drip Mode
+        if (campaign.mode === 'human_drip') {
+            return this.processDripCampaign(campaignId);
+        }
+
+        // STANDARD MODE: Parallel execution
         // Distribute recipients across sender wallets
         const walletsCount = campaign.senderWallets.length;
         const recipientsPerWallet = Math.ceil(recipients.length / walletsCount);
@@ -148,7 +154,104 @@ class CampaignEngine {
     }
 
     /**
-     * Process transactions for a single wallet
+     * Process Drip / Human Mode Campaign
+     * Executes transactions SEQUENTIALLY to ensure true "slow" speed.
+     * Picks a random wallet for each transaction.
+     */
+    async processDripCampaign(campaignId) {
+        const state = this.runningCampaigns.get(campaignId);
+        if (!state || !state.isRunning) return;
+
+        const { campaign, recipients } = state;
+        let processedCount = 0;
+
+        try {
+            logger.info(`Starting Drip Campaign ${campaignId} - Sequential Mode`);
+
+            // Initialize providers/signers pool logic could go here, 
+            // but for simplicity we'll setup per transaction or reuse if optimized later.
+
+            for (let i = 0; i < recipients.length; i++) {
+                const recipientAddress = recipients[i];
+
+                // Check state on every iteration
+                const currentState = this.runningCampaigns.get(campaignId);
+                if (!currentState || !currentState.isRunning || currentState.isPaused || this.emergencyStop) {
+                    logger.info(`Drip Campaign ${campaignId} paused or stopped`);
+                    // Update index to resume later
+                    state.currentIndex = i;
+                    return;
+                }
+
+                // 1. Pick a random sender wallet
+                const randomWalletIndex = Math.floor(Math.random() * campaign.senderWallets.length);
+                const walletDoc = campaign.senderWallets[randomWalletIndex];
+
+                // 2. Check if wallet can send
+                const canSend = walletDoc.canSendTransaction(0);
+                if (!canSend.canSend) {
+                    logger.warn(`Wallet ${walletDoc.address} skipped in drip: ${canSend.reason}`);
+                    // Try to find another wallet? For now just skip this turn or retry?
+                    // Let's just skip to keep it simple, or retry loop could be added.
+                    continue;
+                }
+
+                try {
+                    // 3. Setup signer and contract
+                    const privateKey = decryptPrivateKey(walletDoc.encryptedPrivateKey);
+                    const provider = getProvider();
+                    const signer = new ethers.Wallet(privateKey, provider);
+                    const tokenContract = new ethers.Contract(campaign.tokenAddress, ERC20_ABI, signer);
+
+                    // 4. Calculate Amount
+                    const amount = calculateReward(campaign.rewardConfig, recipientAddress);
+
+                    // 5. Get Nonce
+                    const nonce = await nonceManager.getNextNonce(walletDoc.address);
+
+                    // 6. Send Transaction
+                    await this.sendTransaction(
+                        campaign,
+                        walletDoc,
+                        tokenContract,
+                        recipientAddress,
+                        amount,
+                        nonce
+                    );
+
+                    nonceManager.confirmNonce(walletDoc.address, nonce);
+                    processedCount++;
+
+                } catch (error) {
+                    logger.error(`Drip transaction failed for ${recipientAddress}:`, error.message);
+                    await nonceManager.resetNonce(walletDoc.address);
+                    // Don't throw entire campaign, just log and continue to next recipient
+                }
+
+                // 7. DELAY: Wait randomly (Min/Max intervals)
+                // Only wait if it's not the last transaction
+                if (i < recipients.length - 1) {
+                    const minMs = (campaign.dripConfig?.minInterval || 2) * 60 * 1000;
+                    const maxMs = (campaign.dripConfig?.maxInterval || 5) * 60 * 1000;
+                    // Random delay
+                    const delay = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+
+                    logger.info(`Drip Mode: Sleeping for ${(delay / 1000 / 60).toFixed(2)} mins before next tx`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+
+            // Completed
+            await this.completeCampaign(campaignId);
+
+        } catch (error) {
+            logger.error('Drip campaign processing error', { campaignId, error: error.message });
+            await this.failCampaign(campaignId, error.message);
+        }
+    }
+
+    /**
+     * Process transactions for a single wallet (Standard Mode Helper)
      */
     async processWallet(campaign, walletDoc, recipients) {
         const walletId = walletDoc._id.toString();
@@ -207,8 +310,8 @@ class CampaignEngine {
                     throw error;
                 }
 
-                // SPEED OPTIMIZATION: Default to 1s for ultra-fast processing
-                const delay = (campaign.transferDelay || 1) * 1000; // Convert seconds to milliseconds
+                // Standard Mode: Use transferDelay (fast)
+                const delay = (campaign.transferDelay || 1) * 1000;
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
 
@@ -277,6 +380,30 @@ class CampaignEngine {
                 await campaign.save();
 
                 logger.info(`Transaction confirmed: ${tx.hash}`);
+
+                // Check for progress milestones (25%, 50%, 75%)
+                const total = campaign.progress.totalWallets;
+                if (total > 0) {
+                    const processed = campaign.progress.processedWallets;
+                    const percent = Math.round((processed / total) * 100);
+
+                    // Milestones to notify
+                    const milestones = [25, 50, 75];
+
+                    // Check if we just hit or crossed a milestone
+                    // We check if the previous percentage was below the milestone
+                    const prevPercent = Math.round(((processed - 1) / total) * 100);
+
+                    for (const milestone of milestones) {
+                        if (prevPercent < milestone && percent >= milestone) {
+                            telegramBot.notifyCampaignProgress(campaign, milestone).catch(err =>
+                                logger.error('Telegram progress notification error:', err)
+                            );
+                            break;
+                        }
+                    }
+                }
+
                 return;
 
             } catch (error) {

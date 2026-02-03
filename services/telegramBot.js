@@ -130,12 +130,75 @@ class TelegramBotService {
     }
 
     /**
+     * Notify campaign progress milestone
+     */
+    async notifyCampaignProgress(campaign, percentage) {
+        if (!this.isEnabled) return;
+
+        const progressBar = this.createProgressBar(percentage);
+        const emoji = percentage === 100 ? '🎉' : percentage >= 75 ? '🚀' : percentage >= 50 ? '⚡' : '▶️';
+
+        const message = `
+${emoji} <b>Campaign Progress: ${percentage}%</b>
+━━━━━━━━━━━━━━━━━
+
+<b>${campaign.name}</b>
+
+${progressBar} ${percentage}%
+
+<b>Stats:</b>
+✅ Success: ${campaign.progress?.successfulTx || 0}
+❌ Failed: ${campaign.progress?.failedTx || 0}
+⏳ Remaining: ${(campaign.progress?.totalWallets || 0) - (campaign.progress?.processedWallets || 0)}
+
+ID: <code>${campaign._id}</code>
+        `.trim();
+
+        await this.notifyAdmins(message, {
+            reply_markup: {
+                inline_keyboard: [[
+                    { text: '🔍 View Details', callback_data: `action:campaign_details:${campaign._id}` },
+                    { text: '⏸️ Pause', callback_data: `action:campaign_pause:${campaign._id}` }
+                ]]
+            }
+        });
+    }
+
+    /**
      * Notify all admins
      */
     async notifyAdmins(message, options = {}) {
         for (const adminId of this.adminIds) {
             await this.sendMessage(adminId, message, options);
         }
+    }
+
+    // ==================== UI HELPERS ====================
+
+    createProgressBar(percentage, length = 10) {
+        const filled = Math.round((percentage / 100) * length);
+        const empty = length - filled;
+        return '█'.repeat(filled) + '░'.repeat(empty);
+    }
+
+    getMainMenuKeyboard() {
+        return {
+            keyboard: [
+                ['📊 Status', '🎯 Campaigns'],
+                ['💳 Wallets', '📈 Metrics'],
+                ['🔔 Alerts', '❓ Help']
+            ],
+            resize_keyboard: true,
+            persistent: true
+        };
+    }
+
+    getBackKeyboard() {
+        return {
+            inline_keyboard: [[
+                { text: '⬅️ Back to Menu', callback_data: 'action:menu' }
+            ]]
+        };
     }
 
     // ==================== COMMAND HANDLERS ====================
@@ -186,7 +249,7 @@ Your ID: <code>${userId}</code>
 ${this.adminIds.length === 0 ? '\n⚠️ <b>Setup:</b> Add your ID to TELEGRAM_ADMIN_IDS' : '✅ Authorized Admin'}
         `.trim();
 
-        await this.sendMessage(chatId, welcomeMessage, { reply_markup: keyboard });
+        await this.sendMessage(chatId, welcomeMessage, { reply_markup: this.getMainMenuKeyboard() });
     }
 
     async handleMenu(msg) {
@@ -371,7 +434,9 @@ Last update: ${new Date().toLocaleTimeString()}
                     ? Math.round((campaign.progress.processedWallets / campaign.progress.totalWallets) * 100)
                     : 0;
 
-                message += `${statusEmoji} <b>${campaign.name}</b>\n`;
+                const modeIcon = campaign.mode === 'human_drip' ? '💧' : '🚀';
+
+                message += `${statusEmoji} <b>${campaign.name}</b> ${modeIcon}\n`;
                 message += `ID: <code>${campaign._id}</code>\n`;
                 message += `Status: ${campaign.status}\n`;
                 message += `Progress: ${progress}% (${campaign.progress?.processedWallets || 0}/${campaign.progress?.totalWallets || 0})\n`;
@@ -409,8 +474,14 @@ Last update: ${new Date().toLocaleTimeString()}
 
             const statusEmoji = this.getStatusEmoji(campaign.status);
 
+            const modeBadge = campaign.mode === 'human_drip' ? '💧 <b>HUMAN MODE</b>' : '🚀 <b>STANDARD MODE</b>';
+            const dripInfo = campaign.mode === 'human_drip'
+                ? `\n<b>Drip Config:</b> ${campaign.dripConfig?.minInterval || 2}-${campaign.dripConfig?.maxInterval || 5} min random delay`
+                : '';
+
             const detailsMessage = `
 ${statusEmoji} <b>${campaign.name}</b>
+${modeBadge}
 
 <b>Status:</b> ${campaign.status}
 <b>Progress:</b> ${progress}%
@@ -424,7 +495,7 @@ ${statusEmoji} <b>${campaign.name}</b>
 <b>Configuration:</b>
 Token: <code>${campaign.tokenAddress.slice(0, 10)}...</code>
 Target: ${campaign.targetHolders} holders
-Wallets: ${campaign.senderWallets?.length || 0}
+Wallets: ${campaign.senderWallets?.length || 0}${dripInfo}
 
 <b>Created:</b> ${new Date(campaign.createdAt).toLocaleString()}
             `.trim();
@@ -847,7 +918,7 @@ Total Processed: ${total.toLocaleString()}
 Total Wallets: ${wallets.length}
 ✅ Active: ${activeWallets}
 📊 Daily Usage: ${totalDailyUsage
-        } transactions
+                } transactions
 
             u003cbu003e🔔 RECENT ALERTSu003c/bu003e
 ━━━━━━━━━━━━━━━━━
@@ -863,7 +934,7 @@ Total Wallets: ${wallets.length}
 
             await this.sendMessage(chatId, fullReport);
         } catch (error) {
-            await this.sendMessage(chatId, `❌ Error generating report: ${ error.message } `);
+            await this.sendMessage(chatId, `❌ Error generating report: ${error.message} `);
         }
     }
 
@@ -947,7 +1018,7 @@ Total Wallets: ${wallets.length}
                     break;
             }
         } catch (error) {
-            await this.sendMessage(chatId, `❌ Error: ${ error.message } `);
+            await this.sendMessage(chatId, `❌ Error: ${error.message} `);
         }
     }
 
@@ -963,8 +1034,8 @@ Total Wallets: ${wallets.length}
 <b>${campaign.name}</b>
         ID: <code>${campaign._id}</code>
 
-Total Recipients: ${ campaign.progress?.totalWallets || 0 }
-Sender Wallets: ${ campaign.senderWallets?.length || 0 }
+Total Recipients: ${campaign.progress?.totalWallets || 0}
+Sender Wallets: ${campaign.senderWallets?.length || 0}
         `.trim();
 
         await this.notifyAdmins(message);
@@ -979,11 +1050,11 @@ Sender Wallets: ${ campaign.senderWallets?.length || 0 }
 
 <b>${campaign.name}</b>
 
-✅ Successful: ${ campaign.progress?.successfulTx || 0 }
-❌ Failed: ${ campaign.progress?.failedTx || 0 }
-📈 Success Rate: ${ (campaign.metrics?.successRate || 0).toFixed(1) }%
+✅ Successful: ${campaign.progress?.successfulTx || 0}
+❌ Failed: ${campaign.progress?.failedTx || 0}
+📈 Success Rate: ${(campaign.metrics?.successRate || 0).toFixed(1)}%
 
-            Duration: ${ this.formatDuration(campaign.progress?.startedAt, campaign.progress?.completedAt) }
+            Duration: ${this.formatDuration(campaign.progress?.startedAt, campaign.progress?.completedAt)}
         `.trim();
 
         await this.notifyAdmins(message);
@@ -998,8 +1069,8 @@ Sender Wallets: ${ campaign.senderWallets?.length || 0 }
 
 <b>${campaign.name}</b>
 
-        Processed: ${ campaign.progress?.processedWallets } / ${campaign.progress?.totalWallets}
-Success Rate: ${ (campaign.metrics?.successRate || 0).toFixed(1) }%
+        Processed: ${campaign.progress?.processedWallets} / ${campaign.progress?.totalWallets}
+Success Rate: ${(campaign.metrics?.successRate || 0).toFixed(1)}%
             `.trim();
 
         await this.notifyAdmins(message);
@@ -1011,12 +1082,12 @@ Success Rate: ${ (campaign.metrics?.successRate || 0).toFixed(1) }%
     async notifyAlert(alert) {
         const icon = this.getAlertIcon(alert.type);
         const message = `
-${ icon } <b>${alert.title}</b>
+${icon} <b>${alert.title}</b>
 
-${ alert.message }
+${alert.message}
 
-        Type: ${ alert.type }
-        Time: ${ new Date(alert.createdAt).toLocaleString() }
+        Type: ${alert.type}
+        Time: ${new Date(alert.createdAt).toLocaleString()}
         `.trim();
 
         await this.notifyAdmins(message);
@@ -1050,17 +1121,17 @@ ${ alert.message }
 
         if (campaign.status === 'running') {
             buttons.push([
-                { text: '⏸️ Pause', callback_data: `pause:${ campaign._id } ` },
-                { text: '⏹️ Stop', callback_data: `stop:${ campaign._id } ` }
+                { text: '⏸️ Pause', callback_data: `pause:${campaign._id} ` },
+                { text: '⏹️ Stop', callback_data: `stop:${campaign._id} ` }
             ]);
         } else if (campaign.status === 'paused') {
             buttons.push([
-                { text: '▶️ Resume', callback_data: `resume:${ campaign._id } ` },
-                { text: '⏹️ Stop', callback_data: `stop:${ campaign._id } ` }
+                { text: '▶️ Resume', callback_data: `resume:${campaign._id} ` },
+                { text: '⏹️ Stop', callback_data: `stop:${campaign._id} ` }
             ]);
         }
 
-        buttons.push([{ text: '🔄 Refresh', callback_data: `refresh:${ campaign._id } ` }]);
+        buttons.push([{ text: '🔄 Refresh', callback_data: `refresh:${campaign._id} ` }]);
 
         return { inline_keyboard: buttons };
     }
@@ -1074,11 +1145,11 @@ ${ alert.message }
         const hours = Math.floor(minutes / 60);
 
         if (hours > 0) {
-            return `${ hours }h ${ minutes % 60 } m`;
+            return `${hours}h ${minutes % 60} m`;
         } else if (minutes > 0) {
-            return `${ minutes }m ${ seconds % 60 } s`;
+            return `${minutes}m ${seconds % 60} s`;
         } else {
-            return `${ seconds } s`;
+            return `${seconds} s`;
         }
     }
 }
