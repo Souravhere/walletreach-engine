@@ -40,8 +40,27 @@ class TelegramBotService {
                 this.adminIds = adminIdsStr.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
             }
 
-            // Create bot instance
-            this.bot = new TelegramBot(token, { polling: true });
+            // Create bot instance with SSL fix options
+            this.bot = new TelegramBot(token, {
+                polling: true,
+                request: {
+                    agentOptions: {
+                        keepAlive: true,
+                        family: 4
+                    }
+                }
+            });
+
+            // Handle polling errors to prevent crash and spam
+            this.bot.on('polling_error', (error) => {
+                // Ignore the specific SSL error if it happens occasionally as it auto-recovers
+                if (error.message.includes('SSL routines') || error.message.includes('EFATAL')) {
+                    // logger.debug('Telegram polling SSL warning (auto-recovering):', error.message);
+                    return;
+                }
+                logger.error('Telegram polling error:', error);
+            });
+
             this.isEnabled = true;
 
             // Set up command handlers

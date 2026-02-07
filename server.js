@@ -82,6 +82,10 @@ app.listen(PORT, () => {
   telegramBot.start().catch(err => {
     logger.error('Telegram bot startup error:', err);
   });
+
+  // Start Scheduler Service
+  const schedulerService = require('./services/scheduler');
+  schedulerService.start();
 });
 
 // Graceful shutdown

@@ -105,7 +105,7 @@ const campaignSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['draft', 'ready', 'running', 'paused', 'completed', 'stopped', 'failed'],
+        enum: ['draft', 'ready', 'running', 'paused', 'completed', 'stopped', 'failed', 'scheduled'],
         default: 'draft',
     },
     // Campaign Mode (Standard vs Human/Drip)
@@ -143,6 +143,7 @@ const campaignSchema = new mongoose.Schema({
             default: 0,
         },
         startedAt: Date,
+        scheduledFor: Date,
         completedAt: Date,
         lastTxAt: Date, // Last transaction timestamp
         averageTxTime: { type: Number, default: 0 }, // Average time per transaction in seconds
