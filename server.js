@@ -7,86 +7,58 @@ const connectDB = require('./config/database');
 const app = express();
 const PORT = process.env.WALLETREACH_PORT || 5000;
 
-// Connect to MongoDB
-connectDB();
+// Connect to MongoDB and start server
+const startServer = async () => {
+  try {
+    // Wait for database connection
+    await connectDB();
 
-// Middleware
-app.use(helmet()); // Security headers
-app.use(cors({
-  origin: process.env.WALLETREACH_FRONTEND_URL || 'http://localhost:3000',
-  credentials: true
-}));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+    // Start server
+    app.listen(PORT, () => {
+      console.log(`🚀 WalletReach Engine running on port ${PORT}`);
+      console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
 
-// Routes
-app.use('/api/auth', require('./routes/auth'));
-app.use('/api/users', require('./routes/users'));
-app.use('/api/wallets', require('./routes/wallets'));
-app.use('/api/campaigns', require('./routes/campaigns'));
-app.use('/api/alerts', require('./routes/alerts'));
-app.use('/api/logs', require('./routes/logs'));
-app.use('/api/analytics', require('./routes/analytics'));
-app.use('/api/settings', require('./routes/settings'));
+      // Display RPC and API key status
+      const { getAPIKeyStatus } = require('./config/rpcEndpoints');
+      const apiStatus = getAPIKeyStatus();
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
-});
+      console.log('\n📡 RPC Configuration Status:');
+      console.log(`   Total Endpoints: ${apiStatus.totalEndpoints}`);
+      console.log(`   API Key Endpoints: ${apiStatus.apiKeyEndpoints}`);
+      console.log(`   Public Fallbacks: ${apiStatus.publicEndpoints}`);
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('Error:', err);
-  res.status(err.status || 500).json({
-    error: err.message || 'Internal Server Error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
-  });
-});
+      if (apiStatus.ankr) {
+        console.log('   ✅ Ankr API configured (500M req/day)');
+      } else {
+        console.log('   ⚠️  Ankr API NOT configured - Add for faster speeds');
+      }
 
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ error: 'Route not found' });
-});
+      if (apiStatus.getblock) {
+        console.log('   ✅ GetBlock endpoint configured');
+      } else {
+        console.log('   ⚠️  GetBlock NOT configured');
+      }
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 WalletReach Engine running on port ${PORT}`);
-  console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`   🔄 Automatic failover: ENABLED`);
+      console.log('');
 
-  // Display RPC and API key status
-  const { getAPIKeyStatus } = require('./config/rpcEndpoints');
-  const apiStatus = getAPIKeyStatus();
+      // Start Telegram bot
+      const telegramBot = require('./services/telegramBot');
+      telegramBot.start().catch(err => {
+        logger.error('Telegram bot startup error:', err);
+      });
 
-  console.log('\n📡 RPC Configuration Status:');
-  console.log(`   Total Endpoints: ${apiStatus.totalEndpoints}`);
-  console.log(`   API Key Endpoints: ${apiStatus.apiKeyEndpoints}`);
-  console.log(`   Public Fallbacks: ${apiStatus.publicEndpoints}`);
-
-  if (apiStatus.ankr) {
-    console.log('   ✅ Ankr API configured (500M req/day)');
-  } else {
-    console.log('   ⚠️  Ankr API NOT configured - Add for faster speeds');
+      // Start Scheduler Service
+      const schedulerService = require('./services/scheduler');
+      schedulerService.start();
+    });
+  } catch (err) {
+    console.error('Failed to start server:', err);
+    process.exit(1);
   }
+};
 
-  if (apiStatus.getblock) {
-    console.log('   ✅ GetBlock endpoint configured');
-  } else {
-    console.log('   ⚠️  GetBlock NOT configured');
-  }
-
-  console.log(`   🔄 Automatic failover: ENABLED`);
-  console.log('');
-
-  // Start Telegram bot
-  const telegramBot = require('./services/telegramBot');
-  telegramBot.start().catch(err => {
-    logger.error('Telegram bot startup error:', err);
-  });
-
-  // Start Scheduler Service
-  const schedulerService = require('./services/scheduler');
-  schedulerService.start();
-});
+startServer();
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
