@@ -20,7 +20,6 @@ const createCampaign = async (req, res) => {
             timeRange,
             filters,
             rewardConfig,
-            scheduledFor,
         } = req.body;
 
         // Validation
@@ -78,8 +77,6 @@ const createCampaign = async (req, res) => {
             walletSource: req.body.walletSource || 'generated',
             uploadedWallets: req.body.uploadedWallets || [],
             createdBy: req.user._id,
-            scheduledFor: scheduledFor ? new Date(scheduledFor) : undefined,
-            status: scheduledFor && new Date(scheduledFor) > new Date() ? 'scheduled' : 'draft',
         });
 
         // Create audit log
