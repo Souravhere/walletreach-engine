@@ -78,6 +78,10 @@ const getCampaignAnalytics = async (req, res) => {
  */
 const getOverviewAnalytics = async (req, res) => {
     try {
+        const User = require('../models/User');
+        const Wallet = require('../models/Wallet');
+        const Alert = require('../models/Alert');
+
         // Total campaigns
         const totalCampaigns = await Campaign.countDocuments();
         const activeCampaigns = await Campaign.countDocuments({ status: 'running' });
@@ -117,6 +121,40 @@ const getOverviewAnalytics = async (req, res) => {
             { $sort: { _id: 1 } },
         ]);
 
+        // Campaign stats for chart (last 7 days - holders and transactions)
+        const campaignStats = await Transaction.aggregate([
+            {
+                $match: {
+                    createdAt: { $gte: sevenDaysAgo },
+                    status: 'success',
+                },
+            },
+            {
+                $group: {
+                    _id: {
+                        $dateToString: {
+                            format: '%Y-%m-%d',
+                            date: '$createdAt',
+                        },
+                    },
+                    transactions: { $sum: 1 },
+                },
+            },
+            { $sort: { _id: 1 } },
+        ]).then(async (txData) => {
+            // Format the data with readable dates and add holders count
+            return txData.map((item) => ({
+                name: new Date(item._id).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+                transactions: item.transactions,
+                holders: item.transactions, // For now, assuming 1 holder per transaction
+            }));
+        });
+
+        // Engine Vitals
+        const activeWallets = await Wallet.countDocuments({ isActive: true });
+        const totalUsers = await User.countDocuments();
+        const unreadAlerts = await Alert.countDocuments({ isRead: false });
+
         res.json({
             overview: {
                 totalCampaigns,
@@ -130,6 +168,10 @@ const getOverviewAnalytics = async (req, res) => {
                     : 0,
                 totalHoldersAdded,
                 recentActivity,
+                campaignStats,
+                activeWallets,
+                totalUsers,
+                unreadAlerts,
             },
         });
     } catch (error) {
