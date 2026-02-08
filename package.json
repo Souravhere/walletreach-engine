@@ -28,7 +28,8 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.0.3",
     "node-cron": "^3.0.3",
-    "node-telegram-bot-api": "^0.67.0"
+    "node-telegram-bot-api": "^0.67.0",
+    "systeminformation": "^5.30.7"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
