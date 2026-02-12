@@ -38,6 +38,9 @@ class TelegramBotService {
             // Parse admin IDs
             if (adminIdsStr) {
                 this.adminIds = adminIdsStr.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+                logger.info(`Telegram bot admin IDs configured: [${this.adminIds.join(', ')}]`);
+            } else {
+                logger.warn('No Telegram admin IDs configured - bot will allow all users');
             }
 
             // Create bot instance
@@ -126,7 +129,17 @@ class TelegramBotService {
         if (this.adminIds.length === 0) {
             return true;
         }
-        return this.adminIds.includes(userId);
+
+        // Ensure userId is a number for proper comparison
+        const numericUserId = typeof userId === 'number' ? userId : parseInt(userId);
+
+        // Debug logging
+        logger.info(`Authorization check: userId=${numericUserId}, adminIds=[${this.adminIds.join(', ')}]`);
+
+        const isAuthorized = this.adminIds.includes(numericUserId);
+        logger.info(`User ${numericUserId} authorization result: ${isAuthorized}`);
+
+        return isAuthorized;
     }
 
     /**
