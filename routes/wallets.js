@@ -6,6 +6,7 @@ const {
     getWallets,
     getWalletById,
     updateWallet,
+    toggleWalletStatus,
     deleteWallet,
     getWalletBalance,
 } = require('../controllers/walletController');
@@ -18,6 +19,7 @@ router.post('/', addWallet);
 router.get('/', getWallets);
 router.get('/:id', getWalletById);
 router.put('/:id', updateWallet);
+router.patch('/:id/toggle-status', toggleWalletStatus);
 router.delete('/:id', deleteWallet);
 router.get('/:id/balance', getWalletBalance);
 

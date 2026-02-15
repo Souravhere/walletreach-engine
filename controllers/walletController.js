@@ -133,6 +133,53 @@ const updateWallet = async (req, res) => {
 };
 
 /**
+ * Toggle wallet status (active <-> disabled)
+ */
+const toggleWalletStatus = async (req, res) => {
+    try {
+        const wallet = await Wallet.findById(req.params.id);
+
+        if (!wallet) {
+            return res.status(404).json({ error: 'Wallet not found' });
+        }
+
+        // Toggle between active and disabled
+        const newStatus = wallet.status === 'active' ? 'disabled' : 'active';
+        wallet.status = newStatus;
+
+        // Reset failure count when re-enabling
+        if (newStatus === 'active') {
+            wallet.failures.count = 0;
+            wallet.failures.lastFailure = null;
+        }
+
+        await wallet.save();
+
+        // Create audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'wallet_status_toggled',
+            resourceType: 'wallet',
+            resource: wallet._id.toString(),
+            details: {
+                name: wallet.name,
+                oldStatus: newStatus === 'active' ? 'disabled' : 'active',
+                newStatus
+            },
+            ipAddress: req.ip,
+        });
+
+        res.json({
+            wallet,
+            message: `Wallet ${newStatus === 'active' ? 'enabled' : 'disabled'} successfully`
+        });
+    } catch (error) {
+        console.error('Toggle wallet status error:', error);
+        res.status(500).json({ error: 'Failed to toggle wallet status' });
+    }
+};
+
+/**
  * Delete wallet
  */
 const deleteWallet = async (req, res) => {
@@ -232,6 +279,7 @@ module.exports = {
     getWallets,
     getWalletById,
     updateWallet,
+    toggleWalletStatus,
     deleteWallet,
     getWalletBalance,
 };
