@@ -261,6 +261,8 @@ class CampaignEngine {
     async processWallet(campaign, walletDoc, recipients) {
         const walletId = walletDoc._id.toString();
         let processedCount = 0;
+        let consecutiveFailures = 0;
+        const MAX_CONSECUTIVE_FAILURES = 5; // Pause wallet after 5 consecutive failures
 
         try {
             // Check if wallet can send
@@ -268,16 +270,18 @@ class CampaignEngine {
             if (!canSend.canSend) {
                 logger.warn(`Wallet ${walletId} cannot send: ${canSend.reason}`);
                 await this.createAlert('warning', 'Wallet Cannot Send', canSend.reason, campaign._id, walletDoc._id);
-                return { processed: 0 };
+                return { processed: 0, failed: 0, skipped: recipients.length };
             }
 
             // Get decrypted private key
-            const privateKey = decryptPrivateKey(walletDoc.encryptedPrivateKey);
-            const provider = getProvider();
-            const signer = new ethers.Wallet(privateKey, provider);
+            let privateKey = decryptPrivateKey(walletDoc.encryptedPrivateKey);
+            let provider = getProvider();
+            let signer = new ethers.Wallet(privateKey, provider);
 
             // Get token contract
-            const tokenContract = new ethers.Contract(campaign.tokenAddress, ERC20_ABI, signer);
+            let tokenContract = new ethers.Contract(campaign.tokenAddress, ERC20_ABI, signer);
+
+            let failedCount = 0;
 
             // Process each recipient sequentially
             for (const recipientAddress of recipients) {
@@ -286,6 +290,25 @@ class CampaignEngine {
                 if (!state || !state.isRunning || state.isPaused || this.emergencyStop) {
                     logger.info(`Campaign ${campaign._id} paused or stopped`);
                     break;
+                }
+
+                // If too many consecutive failures, try refreshing the provider connection
+                if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                    logger.warn(`Wallet ${walletId}: ${MAX_CONSECUTIVE_FAILURES} consecutive failures, refreshing provider...`);
+                    await this.createAlert('warning', 'Wallet Reconnecting', 
+                        `${MAX_CONSECUTIVE_FAILURES} consecutive failures detected. Refreshing provider connection.`,
+                        campaign._id, walletDoc._id);
+
+                    try {
+                        provider = createNewProvider();
+                        signer = new ethers.Wallet(privateKey, provider);
+                        tokenContract = new ethers.Contract(campaign.tokenAddress, ERC20_ABI, signer);
+                        consecutiveFailures = 0; // Reset counter after refresh
+                        logger.info(`Wallet ${walletId}: Provider refreshed successfully`);
+                    } catch (refreshError) {
+                        logger.error(`Wallet ${walletId}: Failed to refresh provider, stopping this wallet`, refreshError.message);
+                        break; // Only stop THIS wallet, not the whole campaign
+                    }
                 }
 
                 // Calculate reward amount
@@ -308,11 +331,20 @@ class CampaignEngine {
                     // Mark nonce as confirmed
                     nonceManager.confirmNonce(walletDoc.address, nonce);
                     processedCount++;
+                    consecutiveFailures = 0; // Reset on success
                 } catch (error) {
-                    logger.error(`Transaction failed for nonce ${nonce}:`, error.message);
+                    logger.error(`Transaction failed for ${recipientAddress} (nonce ${nonce}):`, error.message);
                     // Reset nonce on error
                     await nonceManager.resetNonce(walletDoc.address);
-                    throw error;
+                    failedCount++;
+                    consecutiveFailures++;
+
+                    // Check auto-pause conditions (high failure rate)
+                    await this.checkAutoPause(campaign._id.toString());
+
+                    // Don't throw — continue to next recipient
+                    // The failed tx is already recorded inside sendTransaction
+                    continue;
                 }
 
                 // Standard Mode: Use transferDelay (fast)
@@ -320,7 +352,11 @@ class CampaignEngine {
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
 
-            return { processed: processedCount };
+            if (failedCount > 0) {
+                logger.warn(`Wallet ${walletId} completed with ${failedCount} failed transactions out of ${processedCount + failedCount} attempts`);
+            }
+
+            return { processed: processedCount, failed: failedCount };
         } catch (error) {
             logger.error(`Wallet ${walletId} processing error`, { error: error.message });
             walletDoc.recordTransaction(0, false);
@@ -362,53 +398,76 @@ class CampaignEngine {
                 // Wait for confirmation
                 const receipt = await tx.wait();
 
+                // ===== TRANSACTION CONFIRMED - Everything below is non-critical =====
+                // If anything fails below, the TX was still successful.
+
                 // Update transaction record
-                txRecord.status = 'success';
-                txRecord.gasUsed = receipt.gasUsed.toString();
-                txRecord.gasPrice = receipt.gasPrice ? receipt.gasPrice.toString() : '0';
-                await txRecord.save();
+                try {
+                    txRecord.status = 'success';
+                    txRecord.gasUsed = receipt.gasUsed.toString();
+                    txRecord.gasPrice = receipt.gasPrice ? receipt.gasPrice.toString() : '0';
+                    await txRecord.save();
+                } catch (saveErr) {
+                    logger.error(`Failed to save tx record for ${tx.hash}:`, saveErr.message);
+                }
 
                 // Update wallet usage
-                walletDoc.recordTransaction(Number(amount), true);
-                await walletDoc.save();
+                try {
+                    walletDoc.recordTransaction(Number(amount), true);
+                    await walletDoc.save();
+                } catch (walletErr) {
+                    logger.error(`Failed to update wallet usage:`, walletErr.message);
+                }
 
                 // Update campaign progress
-                campaign.progress.successfulTx += 1;
-                campaign.progress.processedWallets += 1;
-                campaign.metrics.totalTokensDistributed = (
-                    BigInt(campaign.metrics.totalTokensDistributed) + BigInt(amount)
-                ).toString();
-                campaign.metrics.totalGasSpent = (
-                    BigInt(campaign.metrics.totalGasSpent) +
-                    (BigInt(receipt.gasUsed) * (receipt.gasPrice || 0n))
-                ).toString();
-                await campaign.save();
+                try {
+                    campaign.progress.successfulTx += 1;
+                    campaign.progress.processedWallets += 1;
+                    campaign.metrics.totalTokensDistributed = (
+                        BigInt(campaign.metrics.totalTokensDistributed) + BigInt(amount)
+                    ).toString();
+                    campaign.metrics.totalGasSpent = (
+                        BigInt(campaign.metrics.totalGasSpent) +
+                        (BigInt(receipt.gasUsed) * (receipt.gasPrice || 0n))
+                    ).toString();
+                    await campaign.save();
+                } catch (progressErr) {
+                    logger.error(`Failed to update campaign progress:`, progressErr.message);
+                }
 
                 logger.info(`Transaction confirmed: ${tx.hash}`);
 
-                // Check for progress milestones (25%, 50%, 75%)
-                const total = campaign.progress.totalWallets;
-                if (total > 0) {
-                    const processed = campaign.progress.processedWallets;
-                    const percent = Math.round((processed / total) * 100);
+                // Check for progress milestones (25%, 50%, 75%) — fully isolated
+                try {
+                    const total = campaign.progress.totalWallets;
+                    if (total > 0) {
+                        const processed = campaign.progress.processedWallets;
+                        const percent = Math.round((processed / total) * 100);
+                        const prevPercent = Math.round(((processed - 1) / total) * 100);
 
-                    // Milestones to notify
-                    const milestones = [25, 50, 75];
+                        const milestones = [25, 50, 75];
 
-                    // Check if we just hit or crossed a milestone
-                    // We check if the previous percentage was below the milestone
-                    const prevPercent = Math.round(((processed - 1) / total) * 100);
-
-                    for (const milestone of milestones) {
-                        if (prevPercent < milestone && percent >= milestone) {
-                            telegramBot.notifyCampaignProgress(campaign, milestone).catch(err =>
-                                logger.error('Telegram progress notification error:', err)
-                            );
-                            break;
+                        for (const milestone of milestones) {
+                            if (prevPercent < milestone && percent >= milestone) {
+                                // Lazy-load telegramBot to prevent circular dependency
+                                try {
+                                    const telegramBot = require('./telegramBot');
+                                    telegramBot.notifyCampaignProgress(campaign, milestone).catch(err =>
+                                        logger.error('Telegram progress notification error:', err.message)
+                                    );
+                                } catch (tgErr) {
+                                    logger.warn('Telegram bot not available for progress notification');
+                                }
+                                break;
+                            }
                         }
                     }
+                } catch (milestoneErr) {
+                    // Milestone notification failure should NEVER affect the campaign
+                    logger.error('Milestone check error (non-critical):', milestoneErr.message);
                 }
 
+                // Transaction successful — return
                 return;
 
             } catch (error) {
@@ -419,22 +478,38 @@ class CampaignEngine {
                 });
 
                 if (retryCount > maxRetries) {
-                    // Max retries exceeded
-                    txRecord.status = 'failed';
-                    txRecord.error = error.message;
-                    txRecord.retryCount = retryCount;
-                    await txRecord.save();
+                    // Max retries exceeded — record failure but DON'T crash the campaign
+                    try {
+                        txRecord.status = 'failed';
+                        txRecord.error = error.message;
+                        txRecord.retryCount = retryCount;
+                        await txRecord.save();
+                    } catch (saveErr) {
+                        logger.error('Failed to save failed tx record:', saveErr.message);
+                    }
 
-                    // Update wallet and campaign
-                    walletDoc.recordTransaction(Number(amount), false);
-                    await walletDoc.save();
+                    // Update wallet and campaign failure counters
+                    try {
+                        walletDoc.recordTransaction(Number(amount), false);
+                        await walletDoc.save();
+                    } catch (walletErr) {
+                        logger.error('Failed to update wallet failure:', walletErr.message);
+                    }
 
-                    campaign.progress.failedTx += 1;
-                    campaign.progress.processedWallets += 1;
-                    await campaign.save();
+                    try {
+                        campaign.progress.failedTx += 1;
+                        campaign.progress.processedWallets += 1;
+                        await campaign.save();
+                    } catch (progressErr) {
+                        logger.error('Failed to update campaign failure stats:', progressErr.message);
+                    }
 
-                    // Check if we should auto-pause
-                    await this.checkAutoPause(campaign._id);
+                    // Check if we should auto-pause (not auto-STOP)
+                    try {
+                        await this.checkAutoPause(campaign._id);
+                    } catch (pauseErr) {
+                        logger.error('Auto-pause check error:', pauseErr.message);
+                    }
 
                     throw error;
                 }
