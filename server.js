@@ -83,6 +83,37 @@ app.listen(PORT, () => {
   telegramBot.start().catch(err => {
     logger.error('Telegram bot startup error:', err);
   });
+  // Auto-resume any campaigns that were left in 'running' state (in case of server restart)
+  const Campaign = require('./models/Campaign');
+  const campaignEngine = require('./services/campaignEngine');
+  
+  Campaign.find({ status: 'running' })
+    .then(runningCampaigns => {
+      if (runningCampaigns.length > 0) {
+        console.log(`\n🔄 Auto-resuming ${runningCampaigns.length} campaigns from previous session...`);
+        runningCampaigns.forEach(campaign => {
+          // Reset status to paused temporarily so startCampaign doesn't reject it
+          campaign.status = 'paused';
+          campaign.save().then(() => {
+            campaignEngine.startCampaign(campaign._id.toString()).catch(err => {
+              console.error(`Failed to auto-resume campaign ${campaign._id}:`, err.message);
+            });
+          });
+        });
+      }
+    })
+    .catch(err => console.error('Error checking for running campaigns:', err.message));
+});
+
+// Robust Error Handling to prevent PM2 crashes from Unhandled Rejections (like Telegram timeouts)
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('CRITICAL: Unhandled Rejection at:', promise, 'reason:', reason);
+  // Do NOT exit the process. Keep the engine running!
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('CRITICAL: Uncaught Exception thrown:', error);
+  // Do NOT exit the process. Keep the engine running!
 });
 
 // Graceful shutdown
