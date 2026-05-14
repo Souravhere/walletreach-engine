@@ -92,15 +92,15 @@ class CampaignEngine {
 
             logger.info(`Campaign ${campaignId} started with ${recipients.length} recipients`);
 
-            // Notify via Telegram
-            try {
-                const telegramBot = require('./telegramBot');
-                telegramBot.notifyCampaignStarted(campaign).catch(err =>
-                    logger.error('Telegram notification error:', err)
-                );
-            } catch (err) {
-                logger.warn('Telegram bot not available for start notification');
-            }
+            // Notify via Telegram (Disabled per user request)
+            // try {
+            //     const telegramBot = require('./telegramBot');
+            //     telegramBot.notifyCampaignStarted(campaign).catch(err =>
+            //         logger.error('Telegram notification error:', err)
+            //     );
+            // } catch (err) {
+            //     logger.warn('Telegram bot not available for start notification');
+            // }
 
             return { success: true, totalRecipients: recipients.length };
         } catch (error) {
@@ -450,14 +450,14 @@ class CampaignEngine {
                         for (const milestone of milestones) {
                             if (prevPercent < milestone && percent >= milestone) {
                                 // Lazy-load telegramBot to prevent circular dependency
-                                try {
-                                    const telegramBot = require('./telegramBot');
-                                    telegramBot.notifyCampaignProgress(campaign, milestone).catch(err =>
-                                        logger.error('Telegram progress notification error:', err.message)
-                                    );
-                                } catch (tgErr) {
-                                    logger.warn('Telegram bot not available for progress notification');
-                                }
+                                // try {
+                                //     const telegramBot = require('./telegramBot');
+                                //     telegramBot.notifyCampaignProgress(campaign, milestone).catch(err =>
+                                //         logger.error('Telegram progress notification error:', err.message)
+                                //     );
+                                // } catch (tgErr) {
+                                //     logger.warn('Telegram bot not available for progress notification');
+                                // }
                                 break;
                             }
                         }
@@ -636,15 +636,15 @@ class CampaignEngine {
 
             await campaign.save();
 
-            // Notify via Telegram
-            try {
-                const telegramBot = require('./telegramBot');
-                telegramBot.notifyCampaignCompleted(campaign).catch(err =>
-                    logger.error('Telegram notification error:', err)
-                );
-            } catch (err) {
-                // Ignore
-            }
+            // Notify via Telegram (Disabled per user request)
+            // try {
+            //     const telegramBot = require('./telegramBot');
+            //     telegramBot.notifyCampaignCompleted(campaign).catch(err =>
+            //         logger.error('Telegram notification error:', err)
+            //     );
+            // } catch (err) {
+            //     // Ignore
+            // }
 
             await this.createAlert(
                 'info',

@@ -86,7 +86,7 @@ app.listen(PORT, () => {
   // Auto-resume any campaigns that were left in 'running' state (in case of server restart)
   const Campaign = require('./models/Campaign');
   const campaignEngine = require('./services/campaignEngine');
-  
+
   Campaign.find({ status: 'running' })
     .then(runningCampaigns => {
       if (runningCampaigns.length > 0) {
