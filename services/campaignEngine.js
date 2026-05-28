@@ -395,23 +395,32 @@ class CampaignEngine {
 
                 logger.info(`Transaction sent: ${tx.hash}`);
 
-                // Wait for confirmation with 60s timeout to prevent hanging campaigns
+                // Wait for confirmation with 120s timeout to prevent hanging campaigns
                 let receipt;
                 try {
                     const waitPromise = tx.wait();
                     const timeoutPromise = new Promise((_, reject) => 
-                        setTimeout(() => reject(new Error('Transaction wait timeout')), 60000)
+                        setTimeout(() => reject(new Error('Transaction wait timeout')), 120000)
                     );
                     receipt = await Promise.race([waitPromise, timeoutPromise]);
                 } catch (waitErr) {
-                    logger.warn(`Wait timeout or error for ${tx.hash}: ${waitErr.message}. Checking receipt manually...`);
-                    try {
-                        receipt = await getProvider().getTransactionReceipt(tx.hash);
-                        if (!receipt) {
-                            throw new Error(`Transaction pending too long or dropped: ${tx.hash}`);
+                    logger.warn(`Wait timeout for ${tx.hash}. Polling receipt manually for 2 minutes...`);
+                    
+                    // Manual polling fallback: check every 10 seconds for 12 attempts (120 seconds)
+                    let manualAttempts = 0;
+                    while (!receipt && manualAttempts < 12) {
+                        try {
+                            receipt = await getProvider().getTransactionReceipt(tx.hash);
+                            if (receipt) break;
+                        } catch (e) {
+                            // Ignore fetch errors during polling
                         }
-                    } catch (manualErr) {
-                        throw new Error(`Failed to confirm transaction: ${tx.hash}`);
+                        manualAttempts++;
+                        await new Promise(resolve => setTimeout(resolve, 10000));
+                    }
+
+                    if (!receipt) {
+                        throw new Error(`Transaction pending too long or dropped: ${tx.hash}`);
                     }
                 }
 
