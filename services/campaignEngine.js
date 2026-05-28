@@ -395,8 +395,25 @@ class CampaignEngine {
 
                 logger.info(`Transaction sent: ${tx.hash}`);
 
-                // Wait for confirmation
-                const receipt = await tx.wait();
+                // Wait for confirmation with 60s timeout to prevent hanging campaigns
+                let receipt;
+                try {
+                    const waitPromise = tx.wait();
+                    const timeoutPromise = new Promise((_, reject) => 
+                        setTimeout(() => reject(new Error('Transaction wait timeout')), 60000)
+                    );
+                    receipt = await Promise.race([waitPromise, timeoutPromise]);
+                } catch (waitErr) {
+                    logger.warn(`Wait timeout or error for ${tx.hash}: ${waitErr.message}. Checking receipt manually...`);
+                    try {
+                        receipt = await getProvider().getTransactionReceipt(tx.hash);
+                        if (!receipt) {
+                            throw new Error(`Transaction pending too long or dropped: ${tx.hash}`);
+                        }
+                    } catch (manualErr) {
+                        throw new Error(`Failed to confirm transaction: ${tx.hash}`);
+                    }
+                }
 
                 // ===== TRANSACTION CONFIRMED - Everything below is non-critical =====
                 // If anything fails below, the TX was still successful.
